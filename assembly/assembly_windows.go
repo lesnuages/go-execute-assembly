@@ -121,9 +121,6 @@ func ExecuteAssembly(hostingDll, assembly []byte, params string) error {
 	final = append(final, assembly...)
 	// Final payload: params + assembly
 	final = append(final, assembly...)
-	log.Printf("[*] Assembly size: %d\n", len(assembly))
-	log.Printf("[*] Params size: %d\n", len(paramsBytes))
-	log.Printf("[*] Total size: %d | Computed size: %d\n", len(final), len(assembly)+len(paramsBytes))
 	// WriteProcessMemory to write the .NET assembly + args
 	_, err = writeProcessMemory(handle, assemblyAddr, unsafe.Pointer(&final[0]), uint32(len(final)))
 	if err != nil {
