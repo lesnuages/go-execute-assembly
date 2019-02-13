@@ -14,13 +14,11 @@ import (
 )
 
 const (
-	// BobLoaderOffset Offset to the ReflectiveLoader
-	BobLoaderOffset        = 0x00000af0
-	PROCESS_ALL_ACCESS     = syscall.STANDARD_RIGHTS_REQUIRED | syscall.SYNCHRONIZE | 0xfff
-	MEM_COMMIT             = 0x001000
-	MEM_RESERVE            = 0x002000
-	PAGE_EXECUTE_READWRITE = 0x000040
-	MAX_ASSEMBLY_LENGTH    = 1025024
+	BobLoaderOffset     = 0x00000af0
+	PROCESS_ALL_ACCESS  = syscall.STANDARD_RIGHTS_REQUIRED | syscall.SYNCHRONIZE | 0xfff
+	MEM_COMMIT          = 0x001000
+	MEM_RESERVE         = 0x002000
+	MAX_ASSEMBLY_LENGTH = 1025024
 )
 
 var (
