@@ -84,9 +84,6 @@ func ExecuteAssembly(hostingDll, assembly []byte, params string) error {
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		HideWindow: true,
 	}
-	cmd.Stdin = os.Stdin
-	cmd.Stderr = os.Stderr
-	cmd.Stdout = os.Stdout
 	cmd.Start()
 	pid := cmd.Process.Pid
 	// OpenProcess with PROC_ACCESS_ALL
