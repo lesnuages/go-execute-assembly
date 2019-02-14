@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"runtime"
 	"syscall"
-	"time"
 	"unsafe"
 )
 
@@ -88,8 +87,7 @@ func ExecuteAssembly(hostingDll, assembly []byte, params string) error {
 	cmd.Stdin = os.Stdin
 	cmd.Stderr = os.Stderr
 	cmd.Stdout = os.Stdout
-	go cmd.Run()
-	time.Sleep(time.Second * 4)
+	cmd.Start()
 	pid := cmd.Process.Pid
 	// OpenProcess with PROC_ACCESS_ALL
 	handle, err := syscall.OpenProcess(PROCESS_ALL_ACCESS, true, uint32(pid))
