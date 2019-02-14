@@ -15,7 +15,7 @@ func main() {
 	}
 	assemblyPath := os.Args[1]
 	hostingDLLPath := os.Args[2]
-	assemblyArgs := ""
+	assemblyArgs := "test"
 	assemblyBytes, err := ioutil.ReadFile(assemblyPath)
 	if err != nil {
 		log.Fatal(err)

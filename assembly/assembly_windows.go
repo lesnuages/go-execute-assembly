@@ -91,8 +91,6 @@ func ExecuteAssembly(hostingDll, assembly []byte, params string) error {
 	stderrIn, _ := cmd.StderrPipe()
 
 	var errStdout, errStderr error
-	stdout := io.MultiWriter(os.Stdout, &stdoutBuf)
-	stderr := io.MultiWriter(os.Stderr, &stderrBuf)
 	cmd.Start()
 	pid := cmd.Process.Pid
 	// OpenProcess with PROC_ACCESS_ALL
@@ -138,9 +136,9 @@ func ExecuteAssembly(hostingDll, assembly []byte, params string) error {
 	}
 
 	go func() {
-		_, errStdout = io.Copy(stdout, stdoutIn)
+		_, errStdout = io.Copy(&stdoutBuf, stdoutIn)
 	}()
-	_, errStderr = io.Copy(stderr, stderrIn)
+	_, errStderr = io.Copy(&stderrBuf, stderrIn)
 
 	if errStdout != nil || errStderr != nil {
 		log.Fatal("failed to capture stdout or stderr\n")
