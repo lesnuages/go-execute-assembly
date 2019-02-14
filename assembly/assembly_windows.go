@@ -3,7 +3,9 @@
 package assembly
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -84,6 +86,13 @@ func ExecuteAssembly(hostingDll, assembly []byte, params string) error {
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		HideWindow: true,
 	}
+	var stdoutBuf, stderrBuf bytes.Buffer
+	stdoutIn, _ := cmd.StdoutPipe()
+	stderrIn, _ := cmd.StderrPipe()
+
+	var errStdout, errStderr error
+	stdout := io.MultiWriter(os.Stdout, &stdoutBuf)
+	stderr := io.MultiWriter(os.Stderr, &stderrBuf)
 	cmd.Start()
 	pid := cmd.Process.Pid
 	// OpenProcess with PROC_ACCESS_ALL
@@ -127,5 +136,16 @@ func ExecuteAssembly(hostingDll, assembly []byte, params string) error {
 	if err != nil {
 		return err
 	}
+
+	go func() {
+		_, errStdout = io.Copy(stdout, stdoutIn)
+	}()
+	_, errStderr = io.Copy(stderr, stderrIn)
+
+	if errStdout != nil || errStderr != nil {
+		log.Fatal("failed to capture stdout or stderr\n")
+	}
+	outStr, errStr := string(stdoutBuf.Bytes()), string(stderrBuf.Bytes())
+	fmt.Printf("\nout:\n%s\nerr:\n%s\n", outStr, errStr)
 	return nil
 }
