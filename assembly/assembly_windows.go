@@ -109,11 +109,10 @@ func ExecuteAssembly(hostingDll, assembly []byte, params string) error {
 	if err != nil {
 		return err
 	}
-	// Padd arguments with 0x00
+	// Padd arguments with 0x00 -- there must be a cleaner way to do that
 	paramsBytes := []byte(params)
 	padding := make([]byte, 1024-len(params))
 	final := append(paramsBytes, padding...)
-	final = append(final, assembly...)
 	// Final payload: params + assembly
 	final = append(final, assembly...)
 	// WriteProcessMemory to write the .NET assembly + args
