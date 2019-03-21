@@ -78,7 +78,8 @@ func createRemoteThread(process syscall.Handle, sa *syscall.SecurityAttributes, 
 // ExecuteAssembly loads a .NET CLR hosting DLL inside a notepad.exe process
 // along with a provided .NET assembly to execute.
 func ExecuteAssembly(hostingDll, assembly []byte, params string) error {
-
+	log.Println("[*] Assembly size:", len(assembly))
+	log.Println("[*] Hosting dll size:", len(hostingDll))
 	if len(assembly) > MAX_ASSEMBLY_LENGTH {
 		return fmt.Errorf("please use an assembly smaller than %d", MAX_ASSEMBLY_LENGTH)
 	}
