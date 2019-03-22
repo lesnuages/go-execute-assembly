@@ -6,6 +6,9 @@ This project is mainly a Go port of [metasploit-execute-assembly](https://github
 
 It starts a `notepad.exe` process, use reflective DLL injection to inject the .NET CLR hosting DLL, as well as the assembly to run and its arguments.
 
+If you don't trust the DLL, you can build your own version from [here](https://github.com/b4rtik/metasploit-execute-assembly/tree/master/HostingCLR_inject).
+You might have to change the [offset](https://github.com/lesnuages/go-execute-assembly/blob/master/assembly/assembly_windows.go#L18) to the `ReflectiveLoader` though.
+
 ## Usage
 
 Compile, then  run with:
