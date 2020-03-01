@@ -5,7 +5,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/djhohnstein/go-execute-assembly/assembly"
+	"github.com/lesnuages/go-execute-assembly/assembly"
 )
 
 func main() {
