@@ -24,7 +24,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	err = assembly.ExecuteAssembly(hostingDLL, assemblyBytes, assemblyArgs)
+	err = assembly.ExecuteAssembly(hostingDLL, assemblyBytes, assemblyArgs, true)
 	if err != nil {
 		log.Fatal(err)
 	}

