@@ -5,7 +5,6 @@ package assembly
 import (
 	"bytes"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -105,10 +104,8 @@ func ExecuteAssembly(hostingDll, assembly []byte, params string) error {
 		HideWindow: true,
 	}
 	var stdoutBuf, stderrBuf bytes.Buffer
-	stdoutIn, _ := cmd.StdoutPipe()
-	stderrIn, _ := cmd.StderrPipe()
-
-	var errStdout, errStderr error
+	cmd.Stdout = &stdoutBuf
+	cmd.Stderr = &stderrBuf
 	cmd.Start()
 	pid := cmd.Process.Pid
 	// OpenProcess with PROC_ACCESS_ALL
@@ -155,7 +152,6 @@ func ExecuteAssembly(hostingDll, assembly []byte, params string) error {
 	log.Println("Got thread handle:", threadHandle)
 	for {
 		code, err := getExitCodeThread(threadHandle)
-		log.Println(code)
 		if err != nil && !strings.Contains(err.Error(), "operation completed successfully") {
 			log.Fatalln(err.Error())
 		}
@@ -166,15 +162,7 @@ func ExecuteAssembly(hostingDll, assembly []byte, params string) error {
 		}
 	}
 	cmd.Process.Kill()
-	go func() {
-		_, errStdout = io.Copy(&stdoutBuf, stdoutIn)
-	}()
-	_, errStderr = io.Copy(&stderrBuf, stderrIn)
-
-	if errStdout != nil || errStderr != nil {
-		log.Fatal("failed to capture stdout or stderr\n")
-	}
-	outStr, errStr := string(stdoutBuf.Bytes()), string(stderrBuf.Bytes())
+	outStr, errStr := stdoutBuf.String(), stderrBuf.String()
 	fmt.Printf("\nout:\n%s\nerr:\n%s\n", outStr, errStr)
 	return nil
 }
