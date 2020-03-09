@@ -82,10 +82,7 @@ func getExitCodeThread(threadHandle syscall.Handle) (uint32, error) {
 	r1, _, e1 := procGetExitCodeThread.Call(
 		uintptr(threadHandle),
 		uintptr(unsafe.Pointer(&exitCode)))
-	log.Println("r1:", r1)
-	log.Printf("Thread State: 0x%08x\n (%d)", exitCode, exitCode)
 	if r1 == 0 {
-		log.Println("r1 was zero:", e1.Error())
 		return exitCode, e1
 	}
 	return exitCode, nil
