@@ -20,7 +20,6 @@ const (
 	PROCESS_ALL_ACCESS  = syscall.STANDARD_RIGHTS_REQUIRED | syscall.SYNCHRONIZE | 0xfff
 	MEM_COMMIT          = 0x001000
 	MEM_RESERVE         = 0x002000
-	MAX_ASSEMBLY_LENGTH = 1025024
 )
 
 var (
@@ -93,7 +92,8 @@ func getExitCodeThread(threadHandle syscall.Handle) (uint32, error) {
 // along with a provided .NET assembly to execute.
 func ExecuteAssembly(hostingDll, assembly []byte, params string, amsi bool) error {
 	AssemblySizeArr := convertIntToByteArr(len(assembly))
-	ParamsSizeArr := convertIntToByteArr(len(params))
+	ParamsSizeArr := convertIntToByteArr(len(params)+1)// +1 accounts for the trailing null
+
 	//log.Printf("[*] Assembly size        : %d \n", len(assembly))
 	//log.Printf("[*] Assembly arr   (hex) : %x \n", AssemblySizeArr)
 	//log.Printf("[*] Params size          : %d \n", len(params))
@@ -127,10 +127,9 @@ func ExecuteAssembly(hostingDll, assembly []byte, params string, amsi bool) erro
 		return err
 	}
 	log.Printf("[*] Hosting DLL reflectively injected at 0x%08x\n", hostingDllAddr)
-	// Total size to allocate = assembly size + 1024 bytes for the args
-	totalSize := uint32(MAX_ASSEMBLY_LENGTH)
+
 	// VirtualAllocEx to allocate another memory segment for hosting the .NET assembly and args
-	assemblyAddr, err := virtualAllocEx(handle, 0, totalSize, MEM_COMMIT|MEM_RESERVE, syscall.PAGE_READWRITE)
+	assemblyAddr, err := virtualAllocEx(handle, 0, uint32(len(assembly)), MEM_COMMIT|MEM_RESERVE, syscall.PAGE_READWRITE)
 	if err != nil {
 		return err
 	}
@@ -147,6 +146,7 @@ func ExecuteAssembly(hostingDll, assembly []byte, params string, amsi bool) erro
 		payload = append(payload, byte(0))
 	}
 	payload = append(payload,  []byte(params)...)
+	payload = append(payload,  '\x00')
 	payload = append(payload, assembly...)
 
 	//log.Printf("[*] First nine bytes 			: %x %x %x\n", payload[:4], payload[4:8], payload[8])

@@ -9,13 +9,13 @@ import (
 )
 
 func main() {
-	if len(os.Args) != 3 {
+	if len(os.Args) != 4 {
 		log.Fatalln("Please provide a path to a .NET assembly")
 		return
 	}
 	assemblyPath := os.Args[1]
 	hostingDLLPath := os.Args[2]
-	assemblyArgs := "test"
+	assemblyArgs := os.Args[3]
 	assemblyBytes, err := ioutil.ReadFile(assemblyPath)
 	if err != nil {
 		log.Fatal(err)
